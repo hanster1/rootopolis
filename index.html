@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#1b120c" />
+    <meta name="description" content="Gearworks Garden: Rootopolis — a brass-diorama gear puzzle. Help Tink Sprocket and Bolt the beetle fix a city of clever mice." />
+    <meta property="og:title" content="Gearworks Garden: Rootopolis" />
+    <meta property="og:image" content="/art/title.webp" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E⚙️%3C/text%3E%3C/svg%3E" />
+    <title>Gearworks Garden: Rootopolis</title>
+  </head>
+  <body data-screen="loading">
+    <main id="app">
+      <canvas id="game-canvas" aria-label="Gear puzzle board"></canvas>
+      <div id="labels" hidden><div id="motor-tag" class="motor-tag"></div></div>
+
+      <!-- HUD, in priority order: status → objective → feedback → flavour -->
+      <section id="hud" hidden>
+        <div id="status">
+          <button id="pause-btn" class="icon-btn" type="button" aria-label="Pause">❚❚</button>
+          <div class="lv"><b id="lv-id">1-1</b><span id="lv-title"></span></div>
+          <span id="par" class="pill"></span>
+        </div>
+        <div id="objective">
+          <div id="targets"></div>
+          <p id="goal"></p>
+          <span id="motor-rpm" hidden></span>
+        </div>
+        <div id="toast" role="status" aria-live="polite"></div>
+        <div id="jam-banner" hidden>⚠ Jammed! Two gears are fighting. <button id="jam-undo" type="button">Undo</button></div>
+        <div id="bolt-wrap"><img id="bolt" src="art/bolt.webp" alt="Bolt the beetle" /><div id="bolt-bubble"></div></div>
+      </section>
+
+      <section id="tray" hidden>
+        <div id="tray-items"></div>
+        <div id="tray-actions">
+          <div id="sandbox-ctl" hidden>
+            <span>Motor</span>
+            <button type="button" data-rpm="30">30</button><button type="button" data-rpm="60" class="on">60</button><button type="button" data-rpm="120">120</button>
+          </div>
+          <button id="hint-btn" type="button">💡 Hint</button>
+          <button id="undo-btn" type="button">↶ Undo</button>
+          <button id="reset-btn" type="button">⟲ Reset</button>
+        </div>
+      </section>
+
+      <div id="gear-menu" hidden>
+        <span id="menu-info"></span>
+        <button id="menu-flip" type="button">⇅ Flip layer</button>
+        <button id="menu-remove" type="button">✕ Remove</button>
+      </div>
+
+      <section id="loading" class="screen">
+        <div class="load-card">
+          <div class="load-gear">⚙</div>
+          <h1>Rootopolis</h1>
+          <div class="bar"><div id="loading-bar"></div></div>
+          <p>Oiling the gears…</p>
+        </div>
+      </section>
+
+      <section id="title" class="screen" hidden>
+        <a class="home" href="https://hansonlab.us" aria-label="Back to Hanson Lab">← Hanson Lab</a>
+        <div class="title-art"></div>
+        <div class="title-card">
+          <p class="kicker">Gearworks Garden</p>
+          <h1>Rootopolis</h1>
+          <p class="tag">A city of clever mice. A Grand Gear knocked loose. One inventor, one beetle, and a lot of teeth to count.</p>
+          <div class="title-buttons">
+            <button id="play-btn" class="big" type="button">▶ Play Story</button>
+            <button id="levels-btn" type="button">Levels</button>
+            <button id="sandbox-btn" type="button">Sandbox</button>
+            <button class="mute-btn" type="button">🔊 Sound on</button>
+          </div>
+          <p class="tiny">Drag gears onto pegs. Count the teeth. Make every machine spin just right.</p>
+        </div>
+      </section>
+
+      <section id="select" class="screen" hidden>
+        <header class="select-head">
+          <button id="select-back" type="button">← Title</button>
+          <h2>Choose a puzzle</h2>
+          <div>
+            <button id="prologue-btn" type="button">Prologue</button>
+            <button id="select-sandbox" type="button">Sandbox</button>
+          </div>
+        </header>
+        <div id="chapters"></div>
+      </section>
+
+      <section id="story" hidden>
+        <div class="story-bg"></div>
+        <div class="story-title"></div>
+        <button class="story-skip" type="button">Skip ⏭</button>
+        <div class="story-box">
+          <img class="story-portrait" alt="" />
+          <div class="story-words">
+            <div class="story-name"></div>
+            <div class="story-beep"></div>
+            <p class="story-text"></p>
+            <span class="story-more">tap ▸</span>
+          </div>
+        </div>
+      </section>
+
+      <section id="pause" class="screen dim" hidden>
+        <div class="card">
+          <h2 id="pause-title">Paused</h2>
+          <button id="resume-btn" class="big" type="button">▶ Resume</button>
+          <button id="restart-btn" type="button">⟲ Restart puzzle</button>
+          <button id="pause-levels" type="button">Levels</button>
+          <button class="mute-btn" type="button">🔊 Sound on</button>
+          <button id="pause-title-btn" type="button">Title screen</button>
+        </div>
+      </section>
+
+      <section id="win" class="screen dim" hidden>
+        <div class="card win-card">
+          <div id="win-stars"></div>
+          <h2 id="win-title">Machine fixed!</h2>
+          <p id="win-used"></p>
+          <ul id="win-lesson"></ul>
+          <p id="win-tip"></p>
+          <div class="row">
+            <button id="win-replay" type="button">⟲ Replay</button>
+            <button id="win-levels" type="button">Levels</button>
+            <button id="win-next" class="big" type="button">Next ▶</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="end" class="screen" hidden>
+        <div class="end-art"></div>
+        <div class="card end-card">
+          <p class="kicker">The End</p>
+          <h2>Rootopolis is saved!</h2>
+          <p>The Grand Gear turns, the lanterns glow, and the Great Sunset Festival begins. You are an official Rootopolis Gear-Fixer.</p>
+          <p id="end-stars" class="end-stars"></p>
+          <div class="row">
+            <button id="end-sandbox" class="big" type="button">Open the Sandbox</button>
+            <button id="end-title" type="button">Title</button>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
