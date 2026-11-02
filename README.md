@@ -2,7 +2,7 @@
 
 A 3D gear-puzzle game for ages 8+. Help Tink Sprocket and Bolt the beetle fix a city of high-tech mice by choosing gears with exactly the right number of teeth.
 
-**Play:** see the production URL in the repo description. It runs on desktop and phones.
+**Play:** https://rootopolis.vercel.app It runs on desktop and phones.
 
 ## Gear rules
 - Speed of the driven gear = motor speed × (driver teeth ÷ driven teeth).
