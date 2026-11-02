@@ -245,3 +245,15 @@ h1, h2, h3 { font-family: Georgia, 'Times New Roman', serif; margin: 0; }
   #chapters { grid-template-columns: 1fr; }
 }
 @media (max-width: 760px) { .story-title { max-width: calc(100vw - 170px); left: 12px; transform: none; font-size: 18px; white-space: normal; } }
+
+/* Short landscape phones: compact tray so it never clips gears or hides the board. */
+@media (max-height: 480px) and (orientation: landscape) {
+  #tray { padding: 4px 6px; gap: 6px; max-width: calc(100vw - 12px); bottom: 4px; }
+  #tray-items { flex: 1 1 auto; min-width: 0; }
+  .tray-gear { min-width: 46px; height: 52px; padding: 2px; }
+  .tray-gear b { font-size: 13px; }
+  .tray-gear svg, .tray-gear canvas, .tray-gear img { width: 26px; height: 26px; }
+  #tray-actions { flex-direction: row !important; flex: none; gap: 4px; }
+  #tray-actions button { white-space: nowrap; }
+  #tray-actions button { padding: 3px 8px; font-size: 12px; }
+}

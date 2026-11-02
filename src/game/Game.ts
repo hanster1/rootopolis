@@ -5,7 +5,12 @@ import { createRenderer, resizeRenderer } from '../core/Renderer';
 import { Audio } from '../audio/Audio';
 import { StoryPlayer } from '../ui/Story';
 import { gearGeometry, gearSvg, GEAR_THICK } from '../render/gearGeometry';
-import { MAT, makeMotor, makeMushroom, makeRock, makeTopper, tableTexture, type Topper } from '../render/props';
+import { World, pickQuality, type Quality } from '../render/world';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { MAT, makeMotor, makeRock, makeTopper, tableTexture, type Topper } from '../render/props';
 import { solveNetwork, pitchRadius, dist, MESH_TOL, type Axle, type Gear, type NetworkResult } from '../gears/network';
 import { type Frac, eq, frac, toNum, fmt, fmtRpm, mul } from '../gears/fraction';
 import { LEVELS, CHAPTERS } from './levels';
@@ -66,12 +71,17 @@ export class Game {
   readonly audio = new Audio();
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
-  private camera = new THREE.PerspectiveCamera(36, 1, 0.1, 200);
+  private camera = new THREE.PerspectiveCamera(40, 1, 0.1, 200);
   private world = new THREE.Group();
   private board = new THREE.Group();
   private loop: Loop;
   private story: StoryPlayer;
   private raycaster = new THREE.Raycaster();
+  private quality: Quality = pickQuality();
+  private city!: World;
+  private composer: EffectComposer | null = null;
+  private bloom: UnrealBloomPass | null = null;
+  private slowFrames = 0;
   private tableMat = new THREE.MeshStandardMaterial({ roughness: 0.7, metalness: 0.05 });
   private screen: Screen = 'loading';
   private progress = loadProgress();
@@ -118,8 +128,12 @@ export class Game {
     this.renderer.toneMappingExposure = 1.1;
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.background = new THREE.Color(0x1b120c);
-    this.scene.fog = new THREE.Fog(0x1b120c, 22, 48);
+    this.scene.background = new THREE.Color(0x6a4a24);
+    this.scene.fog = new THREE.Fog(0x7a4f22, 18, 46);
+    this.scene.environmentIntensity = 0.4;
+    this.city = new World(this.quality);
+    this.scene.add(this.city.root);
+    this.setupPost();
     this.scene.add(this.world);
     this.world.add(this.board);
     this.buildStage();
@@ -138,7 +152,7 @@ export class Game {
     this.scene.add(this.confetti);
 
     this.story = new StoryPlayer(this.audio);
-    this.loop = new Loop((dt) => this.update(dt), () => this.renderer.render(this.scene, this.camera));
+    this.loop = new Loop((dt) => this.update(dt), () => (this.composer ? this.composer.render() : this.renderer.render(this.scene, this.camera)));
     this.bindUi();
     this.bindPointer();
     this.audio.setMuted(this.progress.muted);
@@ -146,92 +160,107 @@ export class Game {
     (window as unknown as { __ROOT: unknown }).__ROOT = this.testApi();
   }
 
+  private setupPost(): void {
+    if (this.quality !== 'high') {
+      this.renderer.shadowMap.type = THREE.PCFShadowMap;
+      return;
+    }
+    const size = this.renderer.getSize(new THREE.Vector2());
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x || 1, size.y || 1), 0.4, 0.5, 0.92);
+    this.composer.addPass(this.bloom);
+    this.composer.addPass(new OutputPass());
+  }
+
+  /** Drop to the light tier if the device can't keep up (sustained >40 ms frames). */
+  private watchPerf(dt: number): void {
+    if (this.quality !== 'high' || this.screen !== 'play') return;
+    this.slowFrames = dt > 0.04 ? this.slowFrames + 1 : Math.max(0, this.slowFrames - 2);
+    if (this.slowFrames > 90) {
+      this.quality = 'low';
+      this.composer?.dispose();
+      this.composer = null;
+      this.bloom = null;
+      document.body.dataset.quality = 'low';
+    }
+  }
+
   // ───────────────────────────── stage ─────────────────────────────
   private buildStage(): void {
-    const hemi = new THREE.HemisphereLight(0xfff1d6, 0x3a2414, 0.7);
+    const hemi = new THREE.HemisphereLight(0xffd59a, 0x241808, 0.5);
     this.scene.add(hemi);
-    const sun = new THREE.DirectionalLight(0xffe2b0, 2.4);
-    sun.position.set(-6, 14, 7);
+    const sun = new THREE.DirectionalLight(0xffb86a, 3.3);
+    sun.position.set(-11, 15, 1);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.mapSize.setScalar(this.quality === 'high' ? 2048 : 1024);
     const s = sun.shadow.camera;
-    s.left = -11;
-    s.right = 11;
-    s.top = 11;
-    s.bottom = -11;
+    s.left = -22;
+    s.right = 22;
+    s.top = 20;
+    s.bottom = -14;
+    s.far = 60;
     sun.shadow.bias = -0.0005;
     this.scene.add(sun);
-    const rim = new THREE.DirectionalLight(0x9fc9ff, 0.5);
+    const rim = new THREE.DirectionalLight(0xffb070, 0.7);
     rim.position.set(8, 6, -10);
     this.scene.add(rim);
 
-    // Diorama table: planks, brass frame, rivets, roots and mushrooms round the edge.
-    const top = new THREE.Mesh(new THREE.BoxGeometry(BOARD_W, 0.3, BOARD_H), this.tableMat);
+  }
+
+  private tableGroup = new THREE.Group();
+  private tableKey = '';
+  /** Brass-framed workbench sized to the level, sitting on a mossy root stump. */
+  private buildTable(W: number, H: number, cx: number, cz: number): void {
+    const key = [W, H, cx, cz].map((v) => v.toFixed(2)).join();
+    if (key === this.tableKey) return;
+    this.tableKey = key;
+    const g = this.tableGroup;
+    g.traverse((o) => { if ((o as THREE.Mesh).isMesh && o !== g) (o as THREE.Mesh).geometry.dispose(); });
+    g.clear();
+    if (!g.parent) this.world.add(g);
+    g.position.set(cx, 0, cz);
+    const top = new THREE.Mesh(new THREE.BoxGeometry(W, 0.3, H), this.tableMat);
     top.position.y = -0.15;
     top.receiveShadow = true;
-    this.world.add(top);
-    const frameMat = MAT.brass;
+    g.add(top);
     const fw = 0.28;
     for (const [w, d, x, z] of [
-      [BOARD_W + fw * 2, fw, 0, BOARD_H / 2 + fw / 2],
-      [BOARD_W + fw * 2, fw, 0, -BOARD_H / 2 - fw / 2],
-      [fw, BOARD_H, BOARD_W / 2 + fw / 2, 0],
-      [fw, BOARD_H, -BOARD_W / 2 - fw / 2, 0],
+      [W + fw * 2, fw, 0, H / 2 + fw / 2],
+      [W + fw * 2, fw, 0, -H / 2 - fw / 2],
+      [fw, H, W / 2 + fw / 2, 0],
+      [fw, H, -W / 2 - fw / 2, 0],
     ] as [number, number, number, number][]) {
-      const f = new THREE.Mesh(new THREE.BoxGeometry(w, 0.42, d), frameMat);
+      const f = new THREE.Mesh(new THREE.BoxGeometry(w, 0.42, d), MAT.brass);
       f.position.set(x, -0.09, z);
       f.castShadow = true;
       f.receiveShadow = true;
-      this.world.add(f);
+      g.add(f);
     }
     const rivetGeo = new THREE.SphereGeometry(0.05, 8, 6);
-    for (let i = 0; i <= 16; i++) {
-      for (const z of [BOARD_H / 2 + fw / 2, -BOARD_H / 2 - fw / 2]) {
+    const n = Math.round(W / 0.9);
+    for (let i = 0; i <= n; i++) {
+      for (const z of [H / 2 + fw / 2, -H / 2 - fw / 2]) {
         const r = new THREE.Mesh(rivetGeo, MAT.copper);
-        r.position.set(-BOARD_W / 2 + (i * BOARD_W) / 16, 0.13, z);
-        this.world.add(r);
+        r.position.set(-W / 2 + (i * W) / n, 0.13, z);
+        g.add(r);
       }
     }
-    const base = new THREE.Mesh(new THREE.BoxGeometry(BOARD_W + 2.4, 0.6, BOARD_H + 2.4), MAT.wood);
-    base.position.y = -0.6;
-    base.receiveShadow = true;
-    this.world.add(base);
-    const ground = new THREE.Mesh(new THREE.CircleGeometry(40, 48), new THREE.MeshStandardMaterial({ color: 0x24170e, roughness: 1 }));
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.9;
-    ground.receiveShadow = true;
-    this.scene.add(ground);
-    const caps = [MAT.red, MAT.cheese, MAT.teal];
-    const spots: [number, number, number][] = [
-      [-9.2, 5.4, 1.4], [9.4, 5.2, 1.1], [-9.6, -5, 0.9], [9.1, -5.4, 1.5], [0, 6.1, 0.7], [-4, -6.2, 0.8], [5, 6.3, 0.9],
-    ];
-    spots.forEach(([x, y, sc], i) => {
-      const m = makeMushroom(sc, caps[i % 3]);
-      m.position.set(x, -0.3, -y);
-      this.world.add(m);
-    });
-    // Roots arching over the back of the diorama.
-    const rootMat = new THREE.MeshStandardMaterial({ color: 0x4a2f1a, roughness: 0.95 });
-    for (let i = 0; i < 5; i++) {
-      const curve = new THREE.CatmullRomCurve3([
-        new THREE.Vector3(-12 + i * 6, -0.8, -7.5),
-        new THREE.Vector3(-10 + i * 6, 2.5 + (i % 2), -9),
-        new THREE.Vector3(-7 + i * 6, 3.2, -10.5),
-        new THREE.Vector3(-5 + i * 6, -0.8, -12),
-      ]);
-      const root = new THREE.Mesh(new THREE.TubeGeometry(curve, 30, 0.35 - i * 0.03, 8), rootMat);
-      root.castShadow = true;
-      this.scene.add(root);
+    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), MAT.lamp);
+      lamp.position.set(sx * (W / 2 + fw / 2), 0.2, sz * (H / 2 + fw / 2));
+      g.add(lamp);
     }
-    // Hanging lanterns for warmth.
-    for (const [x, z] of [[-6, -6], [6, -6]]) {
-      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.25, 16, 12), MAT.lamp);
-      lamp.position.set(x, 3.2, z);
-      this.scene.add(lamp);
-      const pl = new THREE.PointLight(0xffb060, 6, 14, 1.6);
-      pl.position.copy(lamp.position);
-      this.scene.add(pl);
-    }
+    const stump = new THREE.Mesh(new THREE.CylinderGeometry(1, 1.12, 1, 28), new THREE.MeshStandardMaterial({ color: 0x5a3a20, roughness: 0.95 }));
+    stump.scale.set(W / 2 + 0.9, 1, H / 2 + 0.9);
+    stump.position.y = -0.8;
+    stump.receiveShadow = true;
+    g.add(stump);
+    const moss = new THREE.Mesh(new THREE.TorusGeometry(1, 0.12, 8, 40), new THREE.MeshStandardMaterial({ color: 0x3f6420, roughness: 1 }));
+    moss.rotation.x = Math.PI / 2;
+    moss.scale.set(W / 2 + 0.85, H / 2 + 0.85, 2.2);
+    moss.position.y = -0.32;
+    g.add(moss);
   }
 
   private districtTint(ch: number): string {
@@ -270,7 +299,11 @@ export class Game {
     const h = this.canvas.clientHeight;
     this.portrait = h > w * 1.1;
     this.world.rotation.y = this.portrait ? Math.PI / 2 : 0;
-    resizeRenderer(this.renderer, this.camera);
+    resizeRenderer(this.renderer, this.camera, this.quality === 'high' ? 2 : 1.5);
+    if (this.composer) {
+      this.composer.setPixelRatio(this.renderer.getPixelRatio());
+      this.composer.setSize(w, h);
+    }
     this.camera.aspect = w / Math.max(1, h);
     // Fit the board, leaving room for the HUD at the top and the gear tray at the bottom.
     // Frame the level's pegs (plus room for big gears) instead of the whole table.
@@ -283,18 +316,20 @@ export class Game {
       fw = Math.min(BOARD_W, Math.max(9, x1 - x0)); fh = Math.min(BOARD_H, Math.max(6, y1 - y0));
       cx = (x0 + x1) / 2; cy = (y0 + y1) / 2;
     }
+    this.buildTable(fw + 0.4, fh + 0.4, cx, -cy);
     // board (x,y) -> world (x,-z); portrait rotates world by +90deg about Y
     const fx = this.portrait ? -cy : cx, fz = this.portrait ? -cx : -cy;
     const bw = (this.portrait ? fh : fw) + 1.2;
     const bd = (this.portrait ? fw : fh) + 1.2;
-    const tilt = THREE.MathUtils.degToRad(this.portrait ? 62 : 58);
+    const tilt = THREE.MathUtils.degToRad(this.portrait ? 46 : 33);
     const vfov = THREE.MathUtils.degToRad(this.camera.fov);
     const hfov = 2 * Math.atan(Math.tan(vfov / 2) * this.camera.aspect);
-    const usable = this.portrait ? 0.66 : 0.7; // fraction of screen height for the board
+    const shortLand = !this.portrait && window.innerHeight < 480;
+    const usable = this.portrait ? 0.56 : shortLand ? 0.4 : 0.46; // fraction of screen height for the board
     const dW = bw / 2 / Math.tan(hfov / 2) + 1.5;
     const dH = (bd * Math.sin(tilt)) / 2 / Math.tan((vfov * usable) / 2) + 1.5;
     const d = Math.max(dW, dH);
-    const lookZ = this.portrait ? 0.2 : 0.45;
+    const lookZ = this.portrait ? -1.4 : -1.7;
     this.camera.position.set(fx, Math.sin(tilt) * d, fz + Math.cos(tilt) * d + lookZ);
     this.camera.lookAt(fx, 0, fz + lookZ);
     this.camera.updateProjectionMatrix();
@@ -432,6 +467,7 @@ export class Game {
     this.buildPegs();
     this.buildTray(L.spec.tray);
     this.audio.setTheme(String(L.spec.chapter));
+    this.city.setChapter(L.spec.chapter);
     $('#lv-id').textContent = `${L.spec.id}`;
     $('#lv-title').textContent = L.spec.title;
     $('#goal').textContent = L.spec.goal;
@@ -1345,6 +1381,10 @@ export class Game {
     this.motor?.update(this.motorAngle, this.t);
     if (!paused && (this.screen === 'play' || this.screen === 'title' || this.screen === 'win')) this.audio.gearTicks(dt, this.screen === 'title' ? 0 : maxRpm);
     this.checkWin(dt);
+    if (this.won || (this.level && this.isSolvedCached())) this.city.celebrate();
+    else this.city.idle();
+    if (!paused) this.city.update(this.t, dt);
+    this.watchPerf(dt);
     this.updateLabels();
     this.updateConfetti(dt);
     this.quipTimer += dt;
@@ -1358,6 +1398,18 @@ export class Game {
       this.world.rotation.y = (this.portrait ? Math.PI / 2 : 0) + Math.sin(this.t * 0.15) * 0.12;
     } else this.world.rotation.y = this.portrait ? Math.PI / 2 : 0;
     this.settled += dt;
+  }
+
+  private solvedKey = '';
+  private solvedVal = false;
+  /** isSolved() walks the network; only recompute when gears change. */
+  private isSolvedCached(): boolean {
+    const k = this.placed.map((g) => g.pegId + g.teeth + g.layer).join() + (this.level?.spec.id ?? '');
+    if (k !== this.solvedKey) {
+      this.solvedKey = k;
+      this.solvedVal = this.isSolved();
+    }
+    return this.solvedVal;
   }
 
   private lastSize = '';
